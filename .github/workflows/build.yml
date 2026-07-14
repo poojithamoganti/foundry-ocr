@@ -1,0 +1,30 @@
+name: Build and push OCR images
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - image: paddle-ocr
+            dockerfile: infra/docker/Dockerfile.paddle
+          - image: rapid-ocr
+            dockerfile: infra/docker/Dockerfile.rapidocr
+          - image: orchestrator
+            dockerfile: infra/docker/Dockerfile.orchestrator
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.ACR_LOGIN_SERVER }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ secrets.ACR_LOGIN_SERVER }}/${{ matrix.image }}:latest
