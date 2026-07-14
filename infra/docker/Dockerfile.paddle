@@ -1,0 +1,12 @@
+# PaddleOCR runs fine on CPU for layer 2 — no GPU needed (entity extraction and
+# layer-3 vision run on the Foundry-hosted gpt-5-mini deployment instead).
+FROM python:3.11-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir paddlepaddle paddleocr fastapi "uvicorn[standard]" pypdfium2
+
+COPY services/paddle_service.py /app/paddle_service.py
+WORKDIR /app
+
+EXPOSE 8080
+CMD ["uvicorn", "paddle_service:app", "--host", "0.0.0.0", "--port", "8080"]

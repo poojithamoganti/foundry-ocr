@@ -1,0 +1,14 @@
+fastapi
+uvicorn[standard]
+python-multipart
+httpx
+pypdfium2
+pillow
+azure-identity
+azure-servicebus
+azure-storage-blob
+azure-ai-contentsafety
+azure-ai-projects
+openai
+azure-monitor-opentelemetry
+opentelemetry-api

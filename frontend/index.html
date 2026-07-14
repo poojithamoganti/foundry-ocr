@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>foundry_ocr</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: -apple-system, Segoe UI, sans-serif; margin: 0; padding: 1.5rem; background: #f5f5f7; color: #1a1a1a; }
+  h1 { font-size: 1.1rem; margin: 0 0 1rem; }
+  .toolbar { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.25rem; flex-wrap: wrap; }
+  .toolbar label { display: flex; align-items: center; gap: .4rem; font-size: .9rem; }
+  button { padding: .5rem 1rem; border: 1px solid #333; border-radius: 6px; background: #1a1a1a; color: #fff; cursor: pointer; font-size: .9rem; }
+  button:disabled { opacity: .5; cursor: default; }
+  .layout { display: grid; grid-template-columns: 1fr 320px; gap: 1.25rem; align-items: start; }
+  .pages { display: flex; flex-direction: column; gap: 1rem; }
+  .page { position: relative; display: inline-block; max-width: 100%; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.15); }
+  .page img { display: block; max-width: 100%; height: auto; }
+  .bbox { position: absolute; border: 2px solid; box-sizing: border-box; pointer-events: none; opacity: .55; }
+  .bbox.active { opacity: 1; border-width: 3px; }
+  .panel { background: #fff; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,.1); padding: 1rem; position: sticky; top: 1.5rem; }
+  .panel h2 { font-size: .85rem; text-transform: uppercase; color: #666; margin: 0 0 .75rem; }
+  .entity { padding: .5rem; border-radius: 6px; cursor: pointer; margin-bottom: .25rem; border: 1px solid transparent; }
+  .entity:hover, .entity.active { background: #f0f0f0; }
+  .entity .swatch { display: inline-block; width: .7rem; height: .7rem; border-radius: 2px; margin-right: .4rem; }
+  .entity .field { font-weight: 600; font-size: .85rem; }
+  .entity .value { font-size: .85rem; color: #333; word-break: break-word; }
+  .entity .no-bbox { font-size: .75rem; color: #999; }
+  .status { font-size: .85rem; color: #666; margin-bottom: .75rem; }
+  .warning { background: #fff3cd; border: 1px solid #f0c14b; padding: .5rem .75rem; border-radius: 6px; font-size: .85rem; margin-bottom: .75rem; }
+  @media (prefers-color-scheme: dark) {
+    body { background: #16171a; color: #eee; }
+    .page, .panel { background: #212226; box-shadow: 0 1px 4px rgba(0,0,0,.5); }
+    .entity:hover, .entity.active { background: #2c2d31; }
+    .entity .value { color: #ccc; }
+  }
+</style>
+</head>
+<body>
+  <h1>foundry_ocr — upload &amp; extract</h1>
+  <div class="toolbar">
+    <input type="file" id="fileInput" accept="application/pdf">
+    <label><input type="checkbox" id="forceOcr"> Force OCR (ignore embedded text layer)</label>
+    <button id="submitBtn">Extract</button>
+    <span class="status" id="status"></span>
+  </div>
+  <div id="warning"></div>
+  <div class="layout" id="results" style="display:none">
+    <div class="pages" id="pages"></div>
+    <div class="panel">
+      <h2>Extracted entities</h2>
+      <div id="entities"></div>
+    </div>
+  </div>
+
+<script>
+const PALETTE = ["#e6194b", "#3cb44b", "#4363d8", "#f58231", "#911eb4", "#46f0f0", "#f032e6", "#bcf60c", "#008080"];
+
+const fileInput = document.getElementById("fileInput");
+const forceOcr = document.getElementById("forceOcr");
+const submitBtn = document.getElementById("submitBtn");
+const statusEl = document.getElementById("status");
+const warningEl = document.getElementById("warning");
+const resultsEl = document.getElementById("results");
+const pagesEl = document.getElementById("pages");
+const entitiesEl = document.getElementById("entities");
+
+submitBtn.addEventListener("click", async () => {
+  const file = fileInput.files[0];
+  if (!file) { statusEl.textContent = "Choose a PDF first."; return; }
+
+  submitBtn.disabled = true;
+  statusEl.textContent = "Processing — this can take up to a minute (OCR + agent reasoning)...";
+  warningEl.innerHTML = "";
+  resultsEl.style.display = "none";
+
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("force_ocr", forceOcr.checked);
+
+  try {
+    const resp = await fetch("/api/extract", { method: "POST", body: formData });
+    if (!resp.ok) throw new Error(`Server returned ${resp.status}`);
+    const data = await resp.json();
+    render(data);
+    statusEl.textContent = `Done in ${data.agent_rounds} agent round(s).`;
+  } catch (err) {
+    statusEl.textContent = `Error: ${err.message}`;
+  } finally {
+    submitBtn.disabled = false;
+  }
+});
+
+function render(data) {
+  if (!data.guardrail_allowed) {
+    warningEl.innerHTML = '<div class="warning">Content Safety guardrail flagged the extracted entities — result withheld from normal processing, shown here for review only.</div>';
+  }
+
+  pagesEl.innerHTML = "";
+  entitiesEl.innerHTML = "";
+
+  const fieldColor = {};
+  Object.keys(data.entities).forEach((field, i) => { fieldColor[field] = PALETTE[i % PALETTE.length]; });
+
+  data.pages.forEach(page => {
+    const pageDiv = document.createElement("div");
+    pageDiv.className = "page";
+    pageDiv.dataset.page = page.page;
+
+    const img = document.createElement("img");
+    img.src = `data:image/png;base64,${page.image_base64}`;
+    pageDiv.appendChild(img);
+
+    for (const [field, info] of Object.entries(data.entities)) {
+      for (const box of (info.bounding_boxes || [])) {
+        if (box.page !== page.page || !box.bbox) continue;
+        const [x0, y0, x1, y1] = box.bbox;
+        const bboxDiv = document.createElement("div");
+        bboxDiv.className = "bbox";
+        bboxDiv.dataset.field = field;
+        bboxDiv.style.borderColor = fieldColor[field];
+        bboxDiv.style.left = `${x0 * 100}%`;
+        bboxDiv.style.top = `${y0 * 100}%`;
+        bboxDiv.style.width = `${(x1 - x0) * 100}%`;
+        bboxDiv.style.height = `${(y1 - y0) * 100}%`;
+        pageDiv.appendChild(bboxDiv);
+      }
+    }
+    pagesEl.appendChild(pageDiv);
+  });
+
+  for (const [field, info] of Object.entries(data.entities)) {
+    const row = document.createElement("div");
+    row.className = "entity";
+    row.dataset.field = field;
+    const hasBox = (info.bounding_boxes || []).length > 0;
+    row.innerHTML = `
+      <span class="swatch" style="background:${fieldColor[field]}"></span>
+      <span class="field">${field}</span><br>
+      <span class="value">${info.value ?? ""}</span>
+      ${hasBox ? "" : '<div class="no-bbox">no bounding box (not grounded in a span)</div>'}
+    `;
+    row.addEventListener("mouseenter", () => setActive(field, true));
+    row.addEventListener("mouseleave", () => setActive(field, false));
+    entitiesEl.appendChild(row);
+  }
+
+  resultsEl.style.display = "grid";
+}
+
+function setActive(field, on) {
+  document.querySelectorAll(`.bbox[data-field="${CSS.escape(field)}"]`).forEach(el => el.classList.toggle("active", on));
+  document.querySelectorAll(`.entity[data-field="${CSS.escape(field)}"]`).forEach(el => el.classList.toggle("active", on));
+}
+</script>
+</body>
+</html>
