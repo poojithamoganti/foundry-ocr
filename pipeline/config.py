@@ -22,6 +22,7 @@ QUEUE_DEAD_LETTER = "dead_letter_queue"
 CONTAINER_SAMPLES = "samples"
 CONTAINER_RESULTS = "results"
 CONTAINER_CORRECTIONS = "corrections"
+CONTAINER_SCHEMAS = "schemas"
 
 # Layer 1 (embedded text) quality thresholds — below either, the agent's
 # check_embedded_text_layer tool reports bad quality so it escalates to Paddle OCR.
