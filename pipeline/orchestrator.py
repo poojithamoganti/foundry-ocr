@@ -25,14 +25,15 @@ from azure.servicebus import ServiceBusClient, ServiceBusMessage
 from azure.storage.blob import BlobServiceClient
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.staticfiles import StaticFiles
+from PIL import Image
 
 from . import agent_extract, config, telemetry
 
 app = FastAPI()
 _credential = DefaultAzureCredential()
 
-# Placeholder schema for the POC; real deployments would look this up per document
-# type (e.g. from a `doc_type` field on the ingest message) rather than hardcode one.
+# Fallback schema, and what the batch path (no doc_type on the ingest message yet)
+# still uses — the interactive path below looks up a per-doc_type schema instead.
 DEFAULT_SCHEMA = {
     "document_type": "string",
     "date": "string",
@@ -41,10 +42,40 @@ DEFAULT_SCHEMA = {
     "key_entities": "string",
 }
 
+# doc_type -> schema dict, lazily loaded from blob storage and cached — there are only
+# a handful of these and they change rarely, so no need to refetch every request.
+_SCHEMA_CACHE: dict[str, dict] = {}
+
+
+def _get_schema(doc_type: str) -> dict:
+    if not doc_type:
+        return DEFAULT_SCHEMA
+    if doc_type not in _SCHEMA_CACHE:
+        blob = _blob_client().get_container_client(config.CONTAINER_SCHEMAS).download_blob(f"{doc_type}.json")
+        _SCHEMA_CACHE[doc_type] = json.loads(blob.readall())
+    return _SCHEMA_CACHE[doc_type]
+
 
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/api/doc-types")
+def doc_types():
+    container = _blob_client().get_container_client(config.CONTAINER_SCHEMAS)
+    return {"doc_types": [b.name.removesuffix(".json") for b in container.list_blobs() if b.name.endswith(".json")]}
+
+
+def _ensure_pdf_bytes(raw: bytes) -> bytes:
+    """Accept a PDF as-is; convert a plain image upload into a single-page PDF so
+    everything downstream (pypdfium2 preview rendering, both OCR services) only ever
+    has to deal with PDFs."""
+    if raw.startswith(b"%PDF-"):
+        return raw
+    buf = io.BytesIO()
+    Image.open(io.BytesIO(raw)).convert("RGB").save(buf, format="PDF")
+    return buf.getvalue()
 
 
 def _render_preview_pages(pdf_bytes: bytes, dpi: int = 150) -> list[dict]:
@@ -65,13 +96,15 @@ def _render_preview_pages(pdf_bytes: bytes, dpi: int = 150) -> list[dict]:
 
 
 @app.post("/api/extract")
-def api_extract(file: UploadFile = File(...), force_ocr: bool = Form(False)):
-    pdf_bytes = file.file.read()
+def api_extract(file: UploadFile = File(...), doc_type: str = Form(""), force_ocr: bool = Form(False)):
+    pdf_bytes = _ensure_pdf_bytes(file.file.read())
     request_id = f"upload-{uuid.uuid4().hex[:8]}"
+    schema = _get_schema(doc_type)
 
     with telemetry.tracer.start_as_current_span("orchestrator.api_extract") as span:
         span.set_attribute("document.blob_name", request_id)
-        extraction = agent_extract.extract(request_id, pdf_bytes, DEFAULT_SCHEMA, force_ocr=force_ocr)
+        span.set_attribute("document.doc_type", doc_type)
+        extraction = agent_extract.extract(request_id, pdf_bytes, schema, force_ocr=force_ocr)
         return {
             "entities": extraction.entities,
             "agent_rounds": extraction.rounds,
@@ -93,7 +126,7 @@ def _process_message(body: bytes, sb_client: ServiceBusClient, blob_client: Blob
     with telemetry.tracer.start_as_current_span("orchestrator.process_document") as span:
         span.set_attribute("document.blob_name", blob_name)
 
-        pdf_bytes = (
+        pdf_bytes = _ensure_pdf_bytes(
             blob_client.get_container_client(config.CONTAINER_SAMPLES)
             .download_blob(blob_name)
             .readall()
