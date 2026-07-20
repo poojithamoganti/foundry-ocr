@@ -5,46 +5,239 @@
 <title>foundry_ocr</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-  :root { color-scheme: light dark; }
-  body { font-family: -apple-system, Segoe UI, sans-serif; margin: 0; padding: 1.5rem; background: #f5f5f7; color: #1a1a1a; }
-  h1 { font-size: 1.1rem; margin: 0 0 1rem; }
-  .toolbar { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.25rem; flex-wrap: wrap; }
-  .toolbar label { display: flex; align-items: center; gap: .4rem; font-size: .9rem; }
-  button { padding: .5rem 1rem; border: 1px solid #333; border-radius: 6px; background: #1a1a1a; color: #fff; cursor: pointer; font-size: .9rem; }
-  button:disabled { opacity: .5; cursor: default; }
-  .layout { display: grid; grid-template-columns: 1fr 320px; gap: 1.25rem; align-items: start; }
-  .pages { display: flex; flex-direction: column; gap: 1rem; }
-  .page { position: relative; display: inline-block; max-width: 100%; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.15); }
-  .page img { display: block; max-width: 100%; height: auto; }
-  .bbox { position: absolute; border: 2px solid; box-sizing: border-box; pointer-events: none; opacity: .55; }
-  .bbox.active { opacity: 1; border-width: 3px; }
-  .panel { background: #fff; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,.1); padding: 1rem; position: sticky; top: 1.5rem; }
-  .panel h2 { font-size: .85rem; text-transform: uppercase; color: #666; margin: 0 0 .75rem; }
-  .entity { padding: .5rem; border-radius: 6px; cursor: pointer; margin-bottom: .25rem; border: 1px solid transparent; }
-  .entity:hover, .entity.active { background: #f0f0f0; }
-  .entity .swatch { display: inline-block; width: .7rem; height: .7rem; border-radius: 2px; margin-right: .4rem; }
-  .entity .field { font-weight: 600; font-size: .85rem; }
-  .entity .value { font-size: .85rem; color: #333; word-break: break-word; }
-  .entity .no-bbox { font-size: .75rem; color: #999; }
-  .status { font-size: .85rem; color: #666; margin-bottom: .75rem; }
-  .warning { background: #fff3cd; border: 1px solid #f0c14b; padding: .5rem .75rem; border-radius: 6px; font-size: .85rem; margin-bottom: .75rem; }
-  @media (prefers-color-scheme: dark) {
-    body { background: #16171a; color: #eee; }
-    .page, .panel { background: #212226; box-shadow: 0 1px 4px rgba(0,0,0,.5); }
-    .entity:hover, .entity.active { background: #2c2d31; }
-    .entity .value { color: #ccc; }
+  :root {
+    color-scheme: light dark;
+    --bg: #f2f3f6;
+    --surface: #ffffff;
+    --surface-2: #f7f8fa;
+    --ink: #191c20;
+    --ink-muted: #5b6270;
+    --ink-faint: #8a91a0;
+    --line: #e3e5e9;
+    --accent: #3457d5;
+    --accent-ink: #2540a8;
+    --accent-wash: #eaeefc;
+    --warn: #9a6b12;
+    --warn-bg: #fdf3dd;
+    --warn-line: #f0d99a;
+    --shadow: 0 1px 2px rgba(20,22,30,.04), 0 6px 20px -8px rgba(20,22,30,.12);
   }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a;
+      --surface: #1c1f24;
+      --surface-2: #20242a;
+      --ink: #e8eaed;
+      --ink-muted: #9aa3ae;
+      --ink-faint: #6b7480;
+      --line: #2a2e35;
+      --accent: #6d8bff;
+      --accent-ink: #a9bbff;
+      --accent-wash: #1c2340;
+      --warn: #e8c468;
+      --warn-bg: #2c2612;
+      --warn-line: #4a3f1c;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 6px 20px -8px rgba(0,0,0,.5);
+    }
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+  }
+
+  .shell { max-width: 1180px; margin: 0 auto; padding: 28px 24px 56px; }
+
+  .app-header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding-bottom: 20px;
+    margin-bottom: 22px;
+    border-bottom: 1px solid var(--line);
+  }
+  .brand-mark {
+    width: 38px; height: 38px;
+    border-radius: 9px;
+    background: var(--accent);
+    color: #fff;
+    font-weight: 700;
+    font-size: 13px;
+    letter-spacing: .02em;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .app-header h1 { font-size: 17px; font-weight: 700; margin: 0; letter-spacing: -.01em; }
+  .app-header .tagline { font-size: 13px; color: var(--ink-muted); margin: 2px 0 0; }
+
+  .upload-card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+    padding: 20px 22px;
+    display: flex;
+    align-items: flex-end;
+    gap: 20px;
+    flex-wrap: wrap;
+    margin-bottom: 18px;
+  }
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .field label {
+    font-size: 11.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    color: var(--ink-faint);
+  }
+  select, .file-picker button {
+    font: inherit;
+    font-size: 13.5px;
+    border: 1px solid var(--line);
+    background: var(--surface-2);
+    color: var(--ink);
+    border-radius: 7px;
+    padding: 8px 12px;
+    min-height: 36px;
+  }
+  select { min-width: 190px; }
+  select:focus-visible, .file-picker button:focus-visible, .btn-primary:focus-visible, .checkbox-field input:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  .file-picker { display: flex; align-items: center; gap: 10px; }
+  .file-picker button { cursor: pointer; }
+  .file-picker button:hover { border-color: var(--accent); color: var(--accent-ink); }
+  .file-name { font-size: 13px; color: var(--ink-muted); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .checkbox-field {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13.5px;
+    color: var(--ink-muted);
+    padding-bottom: 8px;
+  }
+  .checkbox-field input { width: 16px; height: 16px; accent-color: var(--accent); }
+
+  .btn-primary {
+    font: inherit;
+    font-size: 13.5px;
+    font-weight: 600;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 7px;
+    padding: 9px 20px;
+    cursor: pointer;
+    min-height: 36px;
+  }
+  .btn-primary:hover { background: var(--accent-ink); }
+  .btn-primary:disabled { opacity: .5; cursor: default; background: var(--accent); }
+
+  .status { font-size: 13px; color: var(--ink-muted); padding-bottom: 8px; }
+
+  .warning {
+    background: var(--warn-bg);
+    border: 1px solid var(--warn-line);
+    color: var(--warn);
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 13.5px;
+    margin-bottom: 16px;
+  }
+
+  .empty-state {
+    background: var(--surface);
+    border: 1px dashed var(--line);
+    border-radius: 12px;
+    padding: 48px 24px;
+    text-align: center;
+    color: var(--ink-faint);
+    font-size: 13.5px;
+  }
+
+  .layout { display: grid; grid-template-columns: 1fr 320px; gap: 20px; align-items: start; }
+  @media (max-width: 760px) { .layout { grid-template-columns: 1fr; } }
+
+  .pages { display: flex; flex-direction: column; gap: 16px; }
+  .page { position: relative; display: inline-block; max-width: 100%; background: var(--surface); border-radius: 8px; overflow: hidden; box-shadow: var(--shadow); }
+  .page img { display: block; max-width: 100%; height: auto; }
+  .bbox { position: absolute; border: 2px solid; box-sizing: border-box; pointer-events: none; opacity: .55; border-radius: 2px; }
+  .bbox.active { opacity: 1; border-width: 3px; }
+
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+    padding: 16px;
+    position: sticky;
+    top: 20px;
+  }
+  .panel h2 {
+    font-size: 11.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--ink-faint);
+    margin: 0 0 12px;
+  }
+  .entity {
+    padding: 9px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    margin-bottom: 4px;
+    border: 1px solid transparent;
+  }
+  .entity:hover, .entity.active { background: var(--accent-wash); border-color: var(--line); }
+  .entity .swatch { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 7px; }
+  .entity .field { font-weight: 600; font-size: 12.5px; letter-spacing: .01em; }
+  .entity .value { font-size: 13.5px; color: var(--ink); word-break: break-word; margin-top: 2px; display: block; }
+  .entity .no-bbox { font-size: 11.5px; color: var(--ink-faint); margin-top: 3px; }
 </style>
 </head>
 <body>
-  <h1>foundry_ocr — upload &amp; extract</h1>
-  <div class="toolbar">
-    <input type="file" id="fileInput" accept="application/pdf">
-    <label><input type="checkbox" id="forceOcr"> Force OCR (ignore embedded text layer)</label>
-    <button id="submitBtn">Extract</button>
+<div class="shell">
+
+  <header class="app-header">
+    <span class="brand-mark">FO</span>
+    <div>
+      <h1>foundry_ocr</h1>
+      <p class="tagline">Upload a PDF or image to extract structured fields with grounded bounding boxes.</p>
+    </div>
+  </header>
+
+  <section class="upload-card">
+    <div class="field">
+      <label for="docType">Document type</label>
+      <select id="docType"><option value="">Loading…</option></select>
+    </div>
+    <div class="field">
+      <label>Document</label>
+      <div class="file-picker">
+        <input type="file" id="fileInput" accept="application/pdf,image/*" hidden>
+        <button type="button" id="filePickerBtn">Choose file</button>
+        <span class="file-name" id="fileName">No file chosen</span>
+      </div>
+    </div>
+    <label class="checkbox-field"><input type="checkbox" id="forceOcr"> Force OCR (ignore embedded text layer)</label>
+    <button id="submitBtn" class="btn-primary">Extract</button>
     <span class="status" id="status"></span>
-  </div>
+  </section>
+
   <div id="warning"></div>
+
+  <div class="empty-state" id="emptyState">Upload a document above to see extracted entities and bounding boxes here.</div>
+
   <div class="layout" id="results" style="display:none">
     <div class="pages" id="pages"></div>
     <div class="panel">
@@ -53,21 +246,45 @@
     </div>
   </div>
 
+</div>
+
 <script>
 const PALETTE = ["#e6194b", "#3cb44b", "#4363d8", "#f58231", "#911eb4", "#46f0f0", "#f032e6", "#bcf60c", "#008080"];
 
+const docType = document.getElementById("docType");
 const fileInput = document.getElementById("fileInput");
+const filePickerBtn = document.getElementById("filePickerBtn");
+const fileNameEl = document.getElementById("fileName");
 const forceOcr = document.getElementById("forceOcr");
 const submitBtn = document.getElementById("submitBtn");
 const statusEl = document.getElementById("status");
 const warningEl = document.getElementById("warning");
+const emptyStateEl = document.getElementById("emptyState");
 const resultsEl = document.getElementById("results");
 const pagesEl = document.getElementById("pages");
 const entitiesEl = document.getElementById("entities");
 
+(async function loadDocTypes() {
+  try {
+    const resp = await fetch("/api/doc-types");
+    const data = await resp.json();
+    docType.innerHTML = data.doc_types.length
+      ? data.doc_types.map(t => `<option value="${t}">${t.replace(/_/g, " ")}</option>`).join("")
+      : '<option value="">No document types configured</option>';
+  } catch (err) {
+    docType.innerHTML = '<option value="">Failed to load document types</option>';
+  }
+})();
+
+filePickerBtn.addEventListener("click", () => fileInput.click());
+fileInput.addEventListener("change", () => {
+  fileNameEl.textContent = fileInput.files[0] ? fileInput.files[0].name : "No file chosen";
+});
+
 submitBtn.addEventListener("click", async () => {
   const file = fileInput.files[0];
-  if (!file) { statusEl.textContent = "Choose a PDF first."; return; }
+  if (!file) { statusEl.textContent = "Choose a file first."; return; }
+  if (!docType.value) { statusEl.textContent = "Choose a document type first."; return; }
 
   submitBtn.disabled = true;
   statusEl.textContent = "Processing — this can take up to a minute (OCR + agent reasoning)...";
@@ -76,6 +293,7 @@ submitBtn.addEventListener("click", async () => {
 
   const formData = new FormData();
   formData.append("file", file);
+  formData.append("doc_type", docType.value);
   formData.append("force_ocr", forceOcr.checked);
 
   try {
@@ -92,6 +310,8 @@ submitBtn.addEventListener("click", async () => {
 });
 
 function render(data) {
+  emptyStateEl.style.display = "none";
+
   if (!data.guardrail_allowed) {
     warningEl.innerHTML = '<div class="warning">Content Safety guardrail flagged the extracted entities — result withheld from normal processing, shown here for review only.</div>';
   }
@@ -136,7 +356,7 @@ function render(data) {
     const hasBox = (info.bounding_boxes || []).length > 0;
     row.innerHTML = `
       <span class="swatch" style="background:${fieldColor[field]}"></span>
-      <span class="field">${field}</span><br>
+      <span class="field">${field}</span>
       <span class="value">${info.value ?? ""}</span>
       ${hasBox ? "" : '<div class="no-bbox">no bounding box (not grounded in a span)</div>'}
     `;
