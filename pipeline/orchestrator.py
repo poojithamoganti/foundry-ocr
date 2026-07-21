@@ -100,7 +100,7 @@ def api_extract(
     file: UploadFile = File(...),
     doc_type: str = Form(""),
     force_ocr: bool = Form(False),
-    ocr_engine: str = Form("paddle_ocr"),
+    ocr_engine: str = Form("document_intelligence_layout"),
 ):
     pdf_bytes = _ensure_pdf_bytes(file.file.read())
     request_id = f"upload-{uuid.uuid4().hex[:8]}"
@@ -113,7 +113,8 @@ def api_extract(
         extraction = agent_extract.extract(request_id, pdf_bytes, schema, force_ocr=force_ocr, ocr_engine=ocr_engine)
         return {
             "entities": extraction.entities,
-            "agent_rounds": extraction.rounds,
+            "ocr_source": extraction.ocr_source,
+            "document_text": extraction.document_text,
             "guardrail_allowed": extraction.guardrail.allowed,
             "pages": _render_preview_pages(pdf_bytes),
         }
@@ -145,7 +146,7 @@ def _process_message(body: bytes, sb_client: ServiceBusClient, blob_client: Blob
 
         result = {
             "blob_name": blob_name,
-            "agent_rounds": extraction.rounds,
+            "ocr_source": extraction.ocr_source,
             "entities": extraction.entities,
         }
         blob_client.get_container_client(config.CONTAINER_RESULTS).upload_blob(

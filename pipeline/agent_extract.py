@@ -1,12 +1,7 @@
-"""Runs a document through the Foundry agent (Model Router + function tools) for OCR
-routing and entity extraction in one agentic loop, instead of a hardcoded Python
-cascade: the agent calls check_embedded_text_layer first, then falls through to
-whichever single OCR engine the caller specified via ocr_engine (run_paddle_ocr or
-run_document_intelligence_layout — mutually exclusive per request, not escalation
-tiers) — see pipeline/agent_tools.py for the tool implementations and
-agent/setup_agent.py for how the agent itself is registered. Both OCR tools are
-deterministic (no vision step), so every span the agent cites resolves to a real
-bounding box.
+"""Runs a document through OCR preprocessing (deterministic, plain Python — engine
+picked by the caller via ocr_engine, not decided by the model) followed by exactly
+one Foundry model call for entity extraction. See pipeline/agent_tools.py for the
+preprocessing implementations and table reconstruction for both engines.
 """
 import json
 from dataclasses import dataclass
@@ -26,14 +21,6 @@ def _get_project() -> AIProjectClient:
     return _project
 
 
-def _call(openai_client, input_, conversation_id: str):
-    return openai_client.responses.create(
-        input=input_,
-        conversation=conversation_id,
-        extra_body={"agent_reference": {"name": config.AGENT_NAME, "type": "agent_reference"}},
-    )
-
-
 def _parse_json(raw: str) -> dict | None:
     raw = raw.strip()
     start, end = raw.find("{"), raw.rfind("}")
@@ -45,79 +32,106 @@ def _parse_json(raw: str) -> dict | None:
         return None
 
 
-def _resolve_entities(blob_name: str, raw_entities: dict) -> dict:
-    """Turn the agent's {field: {"value": ..., "source_span_ids": [...]}} answer into
-    {field: {"value": ..., "bounding_boxes": [{"page", "bbox"}, ...]}} by looking up
-    each cited span id's real box. Tolerates the agent returning a bare value instead
-    of the value/source_span_ids shape (bounding_boxes just comes back empty)."""
-    resolved = {}
-    for field, item in raw_entities.items():
-        if isinstance(item, dict) and "value" in item:
-            value, span_ids = item["value"], item.get("source_span_ids", [])
-        else:
-            value, span_ids = item, []
-        resolved[field] = {
-            "value": value,
-            "bounding_boxes": agent_tools.resolve_span_ids(blob_name, span_ids),
+def _compile_schema(schema: dict) -> dict:
+    properties = {
+        field: {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "value": {"type": "string"},
+                    "source_span_ids": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["value", "source_span_ids"],
+            },
         }
+        for field in schema
+    }
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": properties,
+        "required": list(schema),
+    }
+
+
+def _resolve_entities(blob_name: str, raw_entities: dict) -> dict:
+    resolved = {}
+    for field, occurrences in raw_entities.items():
+        if not isinstance(occurrences, list):
+            occurrences = [occurrences]
+        resolved[field] = []
+        for item in occurrences:
+            if isinstance(item, dict) and "value" in item:
+                value, span_ids = item["value"], item.get("source_span_ids", [])
+            else:
+                value, span_ids = item, []
+            resolved[field].append({
+                "value": value,
+                "bounding_boxes": agent_tools.resolve_span_ids(blob_name, span_ids),
+            })
     return resolved
 
 
 @dataclass
 class ExtractionResult:
     entities: dict
-    rounds: int
+    ocr_source: str
+    document_text: str
     guardrail: guardrails.GuardrailResult
 
 
 def extract(
-    blob_name: str, pdf_bytes: bytes, schema: dict, max_rounds: int = 6, force_ocr: bool = False,
-    ocr_engine: str = "paddle_ocr",
+    blob_name: str, pdf_bytes: bytes, schema: dict, force_ocr: bool = False, ocr_engine: str = "document_intelligence_layout",
 ) -> ExtractionResult:
+    if ocr_engine not in agent_tools.OCR_ENGINES:
+        raise ValueError(f"Unknown ocr_engine '{ocr_engine}', must be one of {list(agent_tools.OCR_ENGINES)}")
+
     agent_tools.register_document(blob_name, pdf_bytes)
     try:
         with telemetry.tracer.start_as_current_span("agent_extract.extract") as span:
+            document_text = None
+            ocr_source = "embedded_text_layer"
+            if not force_ocr:
+                layer = agent_tools.check_embedded_text_layer(blob_name)
+                if layer["is_good_quality"]:
+                    document_text = layer["text"]
+
+            if document_text is None:
+                ocr_result = agent_tools.OCR_ENGINES[ocr_engine](blob_name)
+                document_text = ocr_result["text"]
+                ocr_source = ocr_engine
+
+            span.set_attribute("kie.ocr_source", ocr_source)
+
             openai_client = _get_project().get_openai_client()
             conversation = openai_client.conversations.create()
-
-            engine_tool = "run_paddle_ocr" if ocr_engine == "paddle_ocr" else "run_document_intelligence_layout"
-            skip_layer1 = (
-                " Ignore the embedded text layer entirely for this document — do not call "
-                f"check_embedded_text_layer, start directly with {engine_tool}."
-                if force_ocr
-                else ""
-            )
             user_text = (
-                f"Extract these fields from document '{blob_name}': {json.dumps(schema)}. Use "
-                f"your tools to get clean text first. If OCR turns out to be needed, use "
-                f"{engine_tool} as the OCR engine for this document — do not call any other OCR "
-                "tool." + skip_layer1 + " For each field, respond with "
-                '{"value": ..., "source_span_ids": [...]} citing the span id(s) you took the '
-                "value from, as a single JSON object keyed by field name — ONLY that JSON "
-                "object, no other text, once you have enough information."
+                f"Extract these fields from the document below: {json.dumps(list(schema))}. "
+                "Each line/cell is tagged with a span id in brackets, e.g. [s7]. The same "
+                "field can legitimately appear more than once — report every occurrence you "
+                "find. For each occurrence, cite the span id(s) it was read from in "
+                "source_span_ids. If a field never appears, return an empty array for it.\n\n"
+                + document_text
             )
-            response = _call(openai_client, user_text, conversation.id)
-
-            rounds = 0
-            for rounds in range(1, max_rounds + 1):
-                function_calls = [item for item in response.output if item.type == "function_call"]
-                if not function_calls:
-                    break
-
-                next_input = [
-                    {
-                        "type": "function_call_output",
-                        "call_id": call.call_id,
-                        "output": json.dumps(agent_tools.TOOL_IMPLEMENTATIONS[call.name](**json.loads(call.arguments or "{}"))),
+            response = openai_client.responses.create(
+                input=user_text,
+                conversation=conversation.id,
+                extra_body={"agent_reference": {"name": config.AGENT_NAME, "type": "agent_reference"}},
+                text={
+                    "format": {
+                        "type": "json_schema",
+                        "name": "extraction",
+                        "strict": True,
+                        "schema": _compile_schema(schema),
                     }
-                    for call in function_calls
-                ]
-                response = _call(openai_client, next_input, conversation.id)
+                },
+            )
 
-            span.set_attribute("kie.rounds", rounds)
             raw_entities = _parse_json(response.output_text) or {}
             entities = _resolve_entities(blob_name, raw_entities)
             guardrail = guardrails.check_text(json.dumps(entities))
-            return ExtractionResult(entities=entities, rounds=rounds, guardrail=guardrail)
+            return ExtractionResult(entities=entities, ocr_source=ocr_source, document_text=document_text, guardrail=guardrail)
     finally:
         agent_tools.unregister_document(blob_name)
