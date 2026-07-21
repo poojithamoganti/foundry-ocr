@@ -8,6 +8,7 @@ azure-identity
 azure-servicebus
 azure-storage-blob
 azure-ai-contentsafety
+azure-ai-documentintelligence
 azure-ai-projects
 openai
 azure-monitor-opentelemetry
