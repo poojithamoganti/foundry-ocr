@@ -1,10 +1,12 @@
-"""Runs a document through the Foundry agent (gpt-5-mini + function tools) for OCR
+"""Runs a document through the Foundry agent (Model Router + function tools) for OCR
 routing and entity extraction in one agentic loop, instead of a hardcoded Python
-cascade: the agent calls check_embedded_text_layer, escalates to run_paddle_ocr if
-needed, and escalates further to run_rapid_ocr for tables/forms/complex layouts — see
-pipeline/agent_tools.py for the tool implementations and agent/setup_agent.py for how
-the agent itself is registered. All three tools are deterministic OCR (no vision
-step), so every span the agent cites resolves to a real bounding box.
+cascade: the agent calls check_embedded_text_layer first, then falls through to
+whichever single OCR engine the caller specified via ocr_engine (run_paddle_ocr or
+run_document_intelligence_layout — mutually exclusive per request, not escalation
+tiers) — see pipeline/agent_tools.py for the tool implementations and
+agent/setup_agent.py for how the agent itself is registered. Both OCR tools are
+deterministic (no vision step), so every span the agent cites resolves to a real
+bounding box.
 """
 import json
 from dataclasses import dataclass
@@ -69,7 +71,8 @@ class ExtractionResult:
 
 
 def extract(
-    blob_name: str, pdf_bytes: bytes, schema: dict, max_rounds: int = 6, force_ocr: bool = False
+    blob_name: str, pdf_bytes: bytes, schema: dict, max_rounds: int = 6, force_ocr: bool = False,
+    ocr_engine: str = "paddle_ocr",
 ) -> ExtractionResult:
     agent_tools.register_document(blob_name, pdf_bytes)
     try:
@@ -77,15 +80,18 @@ def extract(
             openai_client = _get_project().get_openai_client()
             conversation = openai_client.conversations.create()
 
+            engine_tool = "run_paddle_ocr" if ocr_engine == "paddle_ocr" else "run_document_intelligence_layout"
             skip_layer1 = (
                 " Ignore the embedded text layer entirely for this document — do not call "
-                "check_embedded_text_layer, start directly with run_paddle_ocr."
+                f"check_embedded_text_layer, start directly with {engine_tool}."
                 if force_ocr
                 else ""
             )
             user_text = (
                 f"Extract these fields from document '{blob_name}': {json.dumps(schema)}. Use "
-                "your tools to get clean text first." + skip_layer1 + " For each field, respond with "
+                f"your tools to get clean text first. If OCR turns out to be needed, use "
+                f"{engine_tool} as the OCR engine for this document — do not call any other OCR "
+                "tool." + skip_layer1 + " For each field, respond with "
                 '{"value": ..., "source_span_ids": [...]} citing the span id(s) you took the '
                 "value from, as a single JSON object keyed by field name — ONLY that JSON "
                 "object, no other text, once you have enough information."

@@ -6,7 +6,7 @@ SERVICEBUS_NAMESPACE = os.environ.get("SERVICEBUS_NAMESPACE", "")
 STORAGE_ACCOUNT = os.environ.get("STORAGE_ACCOUNT", "")
 
 PADDLE_OCR_URL = os.environ.get("PADDLE_OCR_URL", "http://paddle-ocr")
-RAPID_OCR_URL = os.environ.get("RAPID_OCR_URL", "http://rapid-ocr")
+DOCUMENT_INTELLIGENCE_ENDPOINT = os.environ.get("DOCUMENT_INTELLIGENCE_ENDPOINT", "")
 
 CONTENT_SAFETY_ENDPOINT = os.environ.get("CONTENT_SAFETY_ENDPOINT", "")
 
@@ -25,12 +25,7 @@ CONTAINER_CORRECTIONS = "corrections"
 CONTAINER_SCHEMAS = "schemas"
 
 # Layer 1 (embedded text) quality thresholds — below either, the agent's
-# check_embedded_text_layer tool reports bad quality so it escalates to Paddle OCR.
+# check_embedded_text_layer tool reports bad quality so it falls through to
+# whichever OCR engine the request specified (see agent_extract.py's ocr_engine param).
 MIN_CHARS_PER_PAGE = 20
 MIN_PRINTABLE_RATIO = 0.9
-
-# Layer 2 -> layer 3 escalation thresholds, surfaced to the agent in the
-# run_paddle_ocr tool description (pipeline/agent_tools.py) so it knows when to
-# call run_rapid_ocr instead of trusting Paddle's spans.
-PADDLE_MIN_CONFIDENCE = 0.80
-PADDLE_MAX_REGIONS_BEFORE_ESCALATE = 15  # dense/multi-column pages

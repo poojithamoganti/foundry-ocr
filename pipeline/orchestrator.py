@@ -96,7 +96,12 @@ def _render_preview_pages(pdf_bytes: bytes, dpi: int = 150) -> list[dict]:
 
 
 @app.post("/api/extract")
-def api_extract(file: UploadFile = File(...), doc_type: str = Form(""), force_ocr: bool = Form(False)):
+def api_extract(
+    file: UploadFile = File(...),
+    doc_type: str = Form(""),
+    force_ocr: bool = Form(False),
+    ocr_engine: str = Form("paddle_ocr"),
+):
     pdf_bytes = _ensure_pdf_bytes(file.file.read())
     request_id = f"upload-{uuid.uuid4().hex[:8]}"
     schema = _get_schema(doc_type)
@@ -104,7 +109,8 @@ def api_extract(file: UploadFile = File(...), doc_type: str = Form(""), force_oc
     with telemetry.tracer.start_as_current_span("orchestrator.api_extract") as span:
         span.set_attribute("document.blob_name", request_id)
         span.set_attribute("document.doc_type", doc_type)
-        extraction = agent_extract.extract(request_id, pdf_bytes, schema, force_ocr=force_ocr)
+        span.set_attribute("document.ocr_engine", ocr_engine)
+        extraction = agent_extract.extract(request_id, pdf_bytes, schema, force_ocr=force_ocr, ocr_engine=ocr_engine)
         return {
             "entities": extraction.entities,
             "agent_rounds": extraction.rounds,
