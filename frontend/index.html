@@ -165,6 +165,37 @@
     font-size: 13.5px;
   }
 
+  .model-input {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+    padding: 14px 18px;
+    margin-top: 20px;
+  }
+  .model-input summary {
+    cursor: pointer;
+    font-size: 11.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--ink-faint);
+  }
+  .model-input pre {
+    margin: 14px 0 0;
+    padding: 12px 14px;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    font-family: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+    font-size: 12.5px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 420px;
+    overflow-y: auto;
+  }
+
   .layout { display: grid; grid-template-columns: 1fr 320px; gap: 20px; align-items: start; }
   @media (max-width: 760px) { .layout { grid-template-columns: 1fr; } }
 
@@ -225,7 +256,7 @@
       <label for="ocrEngine">OCR engine</label>
       <select id="ocrEngine">
         <option value="paddle_ocr">Paddle OCR</option>
-        <option value="document_intelligence">Document Intelligence Layout</option>
+        <option value="document_intelligence_layout">Document Intelligence Layout</option>
       </select>
     </div>
     <div class="field">
@@ -253,6 +284,11 @@
     </div>
   </div>
 
+  <details class="model-input" id="modelInput" style="display:none">
+    <summary>Model input — reconstructed text, reading order</summary>
+    <pre id="modelInputText"></pre>
+  </details>
+
 </div>
 
 <script>
@@ -271,6 +307,8 @@ const emptyStateEl = document.getElementById("emptyState");
 const resultsEl = document.getElementById("results");
 const pagesEl = document.getElementById("pages");
 const entitiesEl = document.getElementById("entities");
+const modelInputEl = document.getElementById("modelInput");
+const modelInputTextEl = document.getElementById("modelInputText");
 
 (async function loadDocTypes() {
   try {
@@ -310,7 +348,7 @@ submitBtn.addEventListener("click", async () => {
     if (!resp.ok) throw new Error(`Server returned ${resp.status}`);
     const data = await resp.json();
     render(data);
-    statusEl.textContent = `Done in ${data.agent_rounds} agent round(s).`;
+    statusEl.textContent = `Done — source: ${data.ocr_source}.`;
   } catch (err) {
     statusEl.textContent = `Error: ${err.message}`;
   } finally {
@@ -320,6 +358,8 @@ submitBtn.addEventListener("click", async () => {
 
 function render(data) {
   emptyStateEl.style.display = "none";
+  modelInputEl.style.display = "block";
+  modelInputTextEl.textContent = data.document_text;
 
   if (!data.guardrail_allowed) {
     warningEl.innerHTML = '<div class="warning">Content Safety guardrail flagged the extracted entities — result withheld from normal processing, shown here for review only.</div>';
@@ -340,46 +380,53 @@ function render(data) {
     img.src = `data:image/png;base64,${page.image_base64}`;
     pageDiv.appendChild(img);
 
-    for (const [field, info] of Object.entries(data.entities)) {
-      for (const box of (info.bounding_boxes || [])) {
-        if (box.page !== page.page || !box.bbox) continue;
-        const [x0, y0, x1, y1] = box.bbox;
-        const bboxDiv = document.createElement("div");
-        bboxDiv.className = "bbox";
-        bboxDiv.dataset.field = field;
-        bboxDiv.style.borderColor = fieldColor[field];
-        bboxDiv.style.left = `${x0 * 100}%`;
-        bboxDiv.style.top = `${y0 * 100}%`;
-        bboxDiv.style.width = `${(x1 - x0) * 100}%`;
-        bboxDiv.style.height = `${(y1 - y0) * 100}%`;
-        pageDiv.appendChild(bboxDiv);
-      }
+    for (const [field, occurrences] of Object.entries(data.entities)) {
+      occurrences.forEach((occ, idx) => {
+        const key = `${field}::${idx}`;
+        for (const box of (occ.bounding_boxes || [])) {
+          if (box.page !== page.page || !box.bbox) continue;
+          const [x0, y0, x1, y1] = box.bbox;
+          const bboxDiv = document.createElement("div");
+          bboxDiv.className = "bbox";
+          bboxDiv.dataset.key = key;
+          bboxDiv.style.borderColor = fieldColor[field];
+          bboxDiv.style.left = `${x0 * 100}%`;
+          bboxDiv.style.top = `${y0 * 100}%`;
+          bboxDiv.style.width = `${(x1 - x0) * 100}%`;
+          bboxDiv.style.height = `${(y1 - y0) * 100}%`;
+          pageDiv.appendChild(bboxDiv);
+        }
+      });
     }
     pagesEl.appendChild(pageDiv);
   });
 
-  for (const [field, info] of Object.entries(data.entities)) {
-    const row = document.createElement("div");
-    row.className = "entity";
-    row.dataset.field = field;
-    const hasBox = (info.bounding_boxes || []).length > 0;
-    row.innerHTML = `
-      <span class="swatch" style="background:${fieldColor[field]}"></span>
-      <span class="field">${field}</span>
-      <span class="value">${info.value ?? ""}</span>
-      ${hasBox ? "" : '<div class="no-bbox">no bounding box (not grounded in a span)</div>'}
-    `;
-    row.addEventListener("mouseenter", () => setActive(field, true));
-    row.addEventListener("mouseleave", () => setActive(field, false));
-    entitiesEl.appendChild(row);
+  for (const [field, occurrences] of Object.entries(data.entities)) {
+    occurrences.forEach((occ, idx) => {
+      const key = `${field}::${idx}`;
+      const row = document.createElement("div");
+      row.className = "entity";
+      row.dataset.key = key;
+      const hasBox = (occ.bounding_boxes || []).length > 0;
+      const label = occurrences.length > 1 ? `${field} #${idx + 1}` : field;
+      row.innerHTML = `
+        <span class="swatch" style="background:${fieldColor[field]}"></span>
+        <span class="field">${label}</span>
+        <span class="value">${occ.value ?? ""}</span>
+        ${hasBox ? "" : '<div class="no-bbox">no bounding box (not grounded in a span)</div>'}
+      `;
+      row.addEventListener("mouseenter", () => setActive(key, true));
+      row.addEventListener("mouseleave", () => setActive(key, false));
+      entitiesEl.appendChild(row);
+    });
   }
 
   resultsEl.style.display = "grid";
 }
 
-function setActive(field, on) {
-  document.querySelectorAll(`.bbox[data-field="${CSS.escape(field)}"]`).forEach(el => el.classList.toggle("active", on));
-  document.querySelectorAll(`.entity[data-field="${CSS.escape(field)}"]`).forEach(el => el.classList.toggle("active", on));
+function setActive(key, on) {
+  document.querySelectorAll(`.bbox[data-key="${CSS.escape(key)}"]`).forEach(el => el.classList.toggle("active", on));
+  document.querySelectorAll(`.entity[data-key="${CSS.escape(key)}"]`).forEach(el => el.classList.toggle("active", on));
 }
 </script>
 </body>
