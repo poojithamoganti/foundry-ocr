@@ -222,6 +222,13 @@
       <select id="docType"><option value="">Loading…</option></select>
     </div>
     <div class="field">
+      <label for="ocrEngine">OCR engine</label>
+      <select id="ocrEngine">
+        <option value="paddle_ocr">Paddle OCR</option>
+        <option value="document_intelligence">Document Intelligence Layout</option>
+      </select>
+    </div>
+    <div class="field">
       <label>Document</label>
       <div class="file-picker">
         <input type="file" id="fileInput" accept="application/pdf,image/*" hidden>
@@ -253,6 +260,7 @@ const PALETTE = ["#e6194b", "#3cb44b", "#4363d8", "#f58231", "#911eb4", "#46f0f0
 
 const docType = document.getElementById("docType");
 const fileInput = document.getElementById("fileInput");
+const ocrEngine = document.getElementById("ocrEngine");
 const filePickerBtn = document.getElementById("filePickerBtn");
 const fileNameEl = document.getElementById("fileName");
 const forceOcr = document.getElementById("forceOcr");
@@ -295,6 +303,7 @@ submitBtn.addEventListener("click", async () => {
   formData.append("file", file);
   formData.append("doc_type", docType.value);
   formData.append("force_ocr", forceOcr.checked);
+  formData.append("ocr_engine", ocrEngine.value);
 
   try {
     const resp = await fetch("/api/extract", { method: "POST", body: formData });
