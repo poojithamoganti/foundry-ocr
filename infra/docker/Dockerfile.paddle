@@ -3,7 +3,10 @@
 FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 && rm -rf /var/lib/apt/lists/*
-RUN pip install --no-cache-dir paddlepaddle paddleocr fastapi "uvicorn[standard]" pypdfium2
+# paddleocr pinned to the last 2.x release: 3.0 removed PPStructure entirely in favor
+# of a redesigned PPStructureV3 pipeline with a different API — paddle_service.py's
+# table reconstruction (_TableGridParser, res["html"]/cell_bbox) targets the 2.x shape.
+RUN pip install --no-cache-dir paddlepaddle paddleocr==2.7.3 fastapi "uvicorn[standard]" pypdfium2
 
 COPY services/paddle_service.py /app/paddle_service.py
 WORKDIR /app
